@@ -37,7 +37,7 @@
 #include <Wire.h>
 #include "USB.h"
 
-#define APP_VERSION "v1.0.261104-1"
+#define APP_VERSION "v1.0.261104-2"
 
 /* ---------------- 引脚配置 ---------------- */
 #define I2C_SDA_PIN   8      /* MPU-6050 SDA */

@@ -6,6 +6,7 @@
 
 | 日期 | 版本 | 内容 |
 |------|------|------|
+| 2026-11-04 | v1.0.261104-2 | 新增 `git1.bat` 一键推送脚本（自动设置 GitHub 代理 + 失败自动重试）；配置远程仓库 `github.com/jsy96/esp32s3` 并完成首次推送 |
 | 2026-11-04 | v1.0.261104-1 | 初版：固件（MPU-6050 驱动 + Mahony 姿态融合 + USB HID 手柄 + BOOT 键回中）、串口遥测协议、调参工具 tune_viewer.py、项目文档 |
 
 **当前验证状态（2026-11-04）**：代码已完成并自查，**尚未上板实测**（等待 MPU-6050 模块到货）。上板后按本 README 步骤烧录验证，结果会追加记录在本表。
@@ -121,11 +122,20 @@ uv run --no-project --with pyserial python tools/tune_viewer.py --port COM7
 | 角度漂移、站姿不稳 | 重新长按 BOOT 回中；检查佩戴是否松动晃荡 |
 | 遥测显示角度对但游戏没反应 | 游戏不认 DirectInput，见"游戏兼容性" |
 
+## 一键推送 git1.bat
+
+改完代码后双击 `git1.bat`（或命令行运行）即可完成 add → commit → push 到 GitHub（`https://github.com/jsy96/esp32s3.git`，main 分支）：
+
+- 有改动时提示输入提交信息，直接回车用默认 `update`
+- 自动把 github.com 的 git 流量指到本机代理 `127.0.0.1:7890`（直连被墙；Clash 端口变了改脚本顶部 `PROXY_PORT`）
+- 当前代理线路不稳定（实测约一半连接被重置），脚本内置**失败自动重试 5 次**；连续失败说明该节点不可用，换 Clash 节点后重跑
+
 ## 目录结构
 
 ```
 esp32s3-tilt-gamepad/
 ├── README.md                          本文档
+├── git1.bat                           一键 add/commit/push 到 GitHub（带代理+重试）
 ├── firmware/
 │   └── tilt_gamepad/
 │       └── tilt_gamepad.ino           固件主程序（Arduino, ESP32-S3）
