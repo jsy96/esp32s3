@@ -109,7 +109,7 @@ def main():
                     f"状态: {STATES.get(st, str(st)):<4s}   运行时长 {t / 1000:8.1f}s",
                     f"横滚(右倾+): {roll:7.2f}°  {bar(roll, VIEW_RANGE)}",
                     f"俯仰(前倾+): {pitch:7.2f}°  {bar(pitch, VIEW_RANGE)}",
-                    f"摇杆输出: X={ox:5d}  Y={oy:5d}  (中位 16384, 满偏 0/32767)",
+                    f"摇杆输出: X={ox:+4d}  Y={oy:+4d}  (中位 0, 满偏 ±127)",
                     f"加速度(g): X={ax:+.2f} Y={ay:+.2f} Z={az:+.2f}",
                 ]
                 sys.stdout.write("\x1b[5A" + "\n".join(lines) + "\n")

@@ -1,7 +1,7 @@
 /*
  * ============================================================
  *  ESP32-S3 + MPU-6050 体感倾斜游戏手柄固件
- *  版本: v1.0.261104-1
+ *  版本: v1.0.261105-1
  * ============================================================
  *  功能:
  *    - MPU-6050 (I2C, 200Hz) 采样 + Mahony 六轴姿态融合
@@ -35,9 +35,9 @@
 
 #include <Arduino.h>
 #include <Wire.h>
-#include "USB.h"
+#include "USBHIDGamepad.h"
 
-#define APP_VERSION "v1.0.261104-2"
+#define APP_VERSION "v1.0.261105-1"
 
 /* ---------------- 引脚配置 ---------------- */
 #define I2C_SDA_PIN   8      /* MPU-6050 SDA */
@@ -80,10 +80,8 @@
  * 固件 -> 主机: #T <ms> <roll_deg> <pitch_deg> <outX> <outY> <ax> <ay> <az> <state>
  *   state: 0=陀螺校准 1=姿态收敛 2=运行 */
 
-/* ---------------- 摇杆数值范围 ---------------- */
-#define AXIS_MIN      0
-#define AXIS_MAX      32767
-#define AXIS_CENTER   16384
+/* ---------------- 摇杆数值范围 (官方手柄描述符为 8 位轴) ---------------- */
+#define AXIS_MAX      127     /* 摇杆满偏值, 中位 0 */
 
 /* ============================================================
  *  LED (板载 RGB, 无 RGB 的板子自动退化为纯串口提示)
@@ -270,59 +268,10 @@ static void quatMul(const float a[4], const float b[4], float out[4]) {
 }
 
 /* ============================================================
- *  USB HID 游戏手柄 (TinyUSB, DirectInput)
- *  报文: X/Y/Z/Rz 各16位 (0~32767, 中位16384) + 8个按键
+ *  USB HID 游戏手柄 (esp32 核心 3.x 官方 USBHIDGamepad 类)
+ *  8 位摇杆轴 (中位 0) + 帽键 + 32 按键, DirectInput 即插即用
+ *  X = 左右倾, Y = 前后倾, BUTTON_A = BOOT 键
  * ============================================================ */
-static const uint8_t GAMEPAD_REPORT_DESCRIPTOR[] = {
-  0x05, 0x01,             /* Usage Page (Generic Desktop)      */
-  0x09, 0x05,             /* Usage (Game Pad)                  */
-  0xA1, 0x01,             /* Collection (Application)          */
-   0xA1, 0x00,            /*  Collection (Physical)            */
-    0x09, 0x30,           /*   Usage (X)   左右倾 -> 左摇杆X    */
-    0x09, 0x31,           /*   Usage (Y)   前后倾 -> 左摇杆Y    */
-    0x09, 0x32,           /*   Usage (Z)   预留(常居中)         */
-    0x09, 0x35,           /*   Usage (Rz)  预留(常居中)         */
-    0x15, 0x00,           /*   Logical Minimum (0)             */
-    0x26, 0xFF, 0x7F,     /*   Logical Maximum (32767)         */
-    0x75, 0x10,           /*   Report Size (16)                */
-    0x95, 0x04,           /*   Report Count (4)                */
-    0x81, 0x02,           /*   Input (Data, Var, Abs)          */
-    0x05, 0x09,           /*   Usage Page (Button)             */
-    0x19, 0x01,           /*   Usage Minimum (Button 1)        */
-    0x29, 0x08,           /*   Usage Maximum (Button 8)        */
-    0x15, 0x00,           /*   Logical Minimum (0)             */
-    0x25, 0x01,           /*   Logical Maximum (1)             */
-    0x75, 0x01,           /*   Report Size (1)                 */
-    0x95, 0x08,           /*   Report Count (8)                */
-    0x81, 0x02,           /*   Input (Data, Var, Abs)          */
-   0xC0,                 /*  End Collection                   */
-  0xC0                   /* End Collection                    */
-};
-
-struct __attribute__((packed)) GamepadReport {
-  uint16_t x, y, z, rz;
-  uint8_t buttons;
-};
-
-class USBHIDGamepad : public USBHIDDevice {
-public:
-  USBHIDGamepad() {
-    /* 构造期注册设备 (须在 USB 协议栈启动前, 与官方 Keyboard/Mouse 同模式) */
-    hid.addDevice(this, sizeof(GAMEPAD_REPORT_DESCRIPTOR));
-  }
-  void begin() { hid.begin(); }
-  bool ready() { return hid.ready(); }
-  bool send(const GamepadReport *rep) {
-    return hid.SendReport(0, rep, sizeof(GamepadReport));
-  }
-  uint16_t _onGetDescriptor(uint8_t *buffer) {
-    memcpy(buffer, GAMEPAD_REPORT_DESCRIPTOR, sizeof(GAMEPAD_REPORT_DESCRIPTOR));
-    return sizeof(GAMEPAD_REPORT_DESCRIPTOR);
-  }
-private:
-  USBHID hid;
-};
-
 static USBHIDGamepad Gamepad;
 
 /* ============================================================
@@ -359,11 +308,11 @@ static float tiltToAxis(float deg) {
   return (deg < 0.0f) ? -f : f;
 }
 
-static uint16_t axisFromFrac(float f) {
-  float v = AXIS_CENTER + f * (AXIS_MAX - AXIS_CENTER);
-  if (v < (float)AXIS_MIN) v = AXIS_MIN;
-  if (v > (float)AXIS_MAX) v = AXIS_MAX;
-  return (uint16_t)(v + 0.5f);
+static int8_t axisToI8(float f) {
+  float v = f * AXIS_MAX;
+  if (v >  (float)AXIS_MAX) v =  AXIS_MAX;
+  if (v < -(float)AXIS_MAX) v = -AXIS_MAX;
+  return (int8_t)(v >= 0.0f ? v + 0.5f : v - 0.5f);
 }
 
 /* 以当前姿态为新中位 */
@@ -474,22 +423,19 @@ static void tickRun(const float acc[3], const float gyr[3], float dt) {
   smX += AXIS_SMOOTH * (tiltToAxis(rollDeg)  - smX);   /* 右倾 -> X 增大 */
   smY += AXIS_SMOOTH * (tiltToAxis(pitchDeg) - smY);   /* 前倾 -> Y 增大 */
 
-  /* 发送 USB HID 报文 */
-  GamepadReport rep;
-  rep.x  = axisFromFrac(smX);
-  rep.y  = axisFromFrac(smY);
-  rep.z  = AXIS_CENTER;
-  rep.rz = AXIS_CENTER;
-  rep.buttons = btnOut ? 0x01 : 0x00;
-  if (Gamepad.ready()) Gamepad.send(&rep);
+  /* 发送 USB HID 报文 (8 位轴, 中位 0; BOOT 键映射为 BUTTON_A) */
+  int8_t outX8 = axisToI8(smX);
+  int8_t outY8 = axisToI8(smY);
+  Gamepad.send(outX8, outY8, 0, 0, 0, 0, HAT_CENTER,
+               btnOut ? ((uint32_t)1 << BUTTON_A) : 0);
 
   /* 遥测 (20Hz) */
   uint32_t nowMs = millis();
   if (telemetryOn && nowMs - lastTelemetryMs >= 50) {
     lastTelemetryMs = nowMs;
-    Serial.printf("#T %lu %.2f %.2f %u %u %.3f %.3f %.3f %d\n",
+    Serial.printf("#T %lu %.2f %.2f %d %d %.3f %.3f %.3f %d\n",
                   (unsigned long)nowMs, rollDeg, pitchDeg,
-                  rep.x, rep.y, acc[0], acc[1], acc[2], (int)state);
+                  (int)outX8, (int)outY8, acc[0], acc[1], acc[2], (int)state);
   }
 }
 

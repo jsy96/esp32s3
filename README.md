@@ -6,10 +6,11 @@
 
 | 日期 | 版本 | 内容 |
 |------|------|------|
+| 2026-11-05 | v1.0.261105-1 | 改用 arduino-cli 命令行环境（免装 Arduino IDE）：新增 `setup1.bat` 一键装工具链（乐鑫国内镜像+ghfast 加速，免代理）、`flash1.bat` 一键编译烧录；固件改用 esp32 核心 3.x 官方 `USBHIDGamepad` 类（摇杆轴改为 ±127/中位 0）；**固件已编译通过**（核心 3.3.12，403KB / 30% Flash） |
 | 2026-11-04 | v1.0.261104-2 | 新增 `git1.bat` 一键推送脚本（自动设置 GitHub 代理 + 失败自动重试）；配置远程仓库 `github.com/jsy96/esp32s3` 并完成首次推送 |
 | 2026-11-04 | v1.0.261104-1 | 初版：固件（MPU-6050 驱动 + Mahony 姿态融合 + USB HID 手柄 + BOOT 键回中）、串口遥测协议、调参工具 tune_viewer.py、项目文档 |
 
-**当前验证状态（2026-11-04）**：代码已完成并自查，**尚未上板实测**（等待 MPU-6050 模块到货）。上板后按本 README 步骤烧录验证，结果会追加记录在本表。
+**当前验证状态（2026-11-05）**：固件已用 arduino-cli（esp32 核心 3.3.12）**编译通过**（403KB / 30% Flash，RAM 17%），**尚未上板实测**（等待 MPU-6050 模块到货）。上板后按本 README 步骤烧录验证，结果会追加记录在本表。
 
 ## 工作原理
 
@@ -51,17 +52,34 @@
 
 AD0 引脚悬空（I2C 地址 0x68）。改了引脚的话同步改固件顶部 `I2C_SDA_PIN / I2C_SCL_PIN`。
 
-## 烧录步骤（Arduino IDE）
+## 烧录步骤（arduino-cli 命令行，主路径）
 
-1. 安装 ESP32 开发板支持（按购买资料里的 CSDN 教程，或 Arduino IDE 开发板管理器搜 "esp32" by Espressif Systems，版本 2.0.14 及以上或 3.x）。
-2. 打开 `firmware/tilt_gamepad/tilt_gamepad.ino`。
-3. **工具菜单设置（重要）**：
-   - 开发板：`ESP32S3 Dev Module`
-   - USB Mode：**`USB-OTG (TinyUSB)`**（不设这个电脑不会识别手柄）
-   - USB CDC On Boot：**`Enabled`**（不设这个串口日志/调参工具没输出）
-   - Flash Size：`16MB`，PSRAM：`OPI PSRAM`（N16R8 对应配置）
-4. 选择端口（插 "USB" 口），点上传。若上传失败：按住板上 BOOT 再按一下 RST，松开 BOOT 进入下载模式后重试。
-5. 烧录完成后按一下 RST（或重新插拔），Windows 设备管理器"人体学输入设备"应出现 HID 设备；`Win+R` 运行 `joy.cpl` 可看到手柄并测试摇杆。
+环境只用命令行，不装 Arduino IDE；下载全部走国内镜像，**不需要开代理**。
+
+**一次性环境安装（已在本机完成）：**
+
+1. 下载 arduino-cli（Windows 64bit zip）：`https://downloads.arduino.cc/arduino-cli/arduino-cli_latest_Windows_64bit.zip`，解压出 `arduino-cli.exe` 放到 `tools/arduino-cli/` 目录
+2. 双击 `setup1.bat`：自动更新板包索引 → `tools/fetch_esp32_core.py` 走国内镜像（乐鑫 dl.espressif.com + ghfast.top）下载全部工具链约 1.9GB 并校验 SHA256 → 离线安装 esp32 核心
+
+**日常编译烧录：**
+
+1. 开发板插 **"USB" 口**（原生 USB，不是 UART 口）
+2. 双击 `flash1.bat`（自动检测串口；也可 `flash1.bat COM7` 指定）——编译+烧录+自动重启
+3. 首次烧录若连不上：**按住 BOOT 不放、按一下 RST、松开 BOOT** 进下载模式再跑一次
+4. 验证：`Win+R` → `joy.cpl` 出现手柄，晃动测试摇杆
+
+固件编译参数（`flash1.bat` 内置，改板子才需要动）：
+`esp32:esp32:esp32s3:USBMode=default,CDCOnBoot=cdc,UploadMode=cdc,FlashSize=16M,PSRAM=opi`
+（注意 `USBMode=default` 就是 USB-OTG(TinyUSB)，`hwcdc` 反而是硬件 CDC——别被名字骗了）
+
+<details><summary>备选：Arduino IDE 烧录（图形界面路径）</summary>
+
+1. 开发板管理器安装 esp32 by Espressif Systems（3.x）
+2. 打开 `firmware/tilt_gamepad/tilt_gamepad.ino`
+3. 工具菜单：开发板 `ESP32S3 Dev Module`、USB Mode `USB-OTG (TinyUSB)`、USB CDC On Boot `Enabled`、Flash Size `16MB`、PSRAM `OPI PSRAM`
+4. 选端口点上传；失败就 BOOT 进下载模式重试
+
+</details>
 
 ## 使用方法
 
@@ -75,10 +93,11 @@ AD0 引脚悬空（I2C 地址 0x68）。改了引脚的话同步改固件顶部 
 
 | 手柄控件 | 来源 | 数值 |
 |---|---|---|
-| 左摇杆 X | 身体左/右倾（右倾增大） | 0~32767，中位 16384 |
-| 左摇杆 Y | 身体前/后倾（前倾增大） | 0~32767，中位 16384 |
-| Z / Rz | 预留，恒居中 | 16384 |
-| 按键 1~8 | 目前只有按键1=BOOT 键，其余预留 | — |
+| 左摇杆 X | 身体左/右倾（右倾增大） | -127~127，中位 0 |
+| 左摇杆 Y | 身体前/后倾（前倾增大） | -127~127，中位 0 |
+| Z / Rz / Rx / Ry | 预留，恒居中 | 0 |
+| 帽键(HAT) | 预留，恒居中 | — |
+| 按键 | BUTTON_A = BOOT 键，其余预留 | — |
 
 ## 调参（改固件顶部宏后重新烧录）
 
@@ -136,11 +155,15 @@ uv run --no-project --with pyserial python tools/tune_viewer.py --port COM7
 esp32s3-tilt-gamepad/
 ├── README.md                          本文档
 ├── git1.bat                           一键 add/commit/push 到 GitHub（带代理+重试）
+├── setup1.bat                         一次性环境安装（国内镜像下载工具链，免代理）
+├── flash1.bat                         一键编译+烧录（自动检测串口，失败自动重试）
 ├── firmware/
 │   └── tilt_gamepad/
-│       └── tilt_gamepad.ino           固件主程序（Arduino, ESP32-S3）
+│       └── tilt_gamepad.ino           固件主程序（Arduino 框架, ESP32-S3）
 └── tools/
-    └── tune_viewer.py                 串口实时调参工具（Python, pyserial）
+    ├── tune_viewer.py                 串口实时调参工具（Python, pyserial）
+    ├── fetch_esp32_core.py            工具链国内镜像下载脚本（乐鑫镜像+ghfast 回退）
+    └── arduino-cli/                   arduino-cli.exe 所在目录（不入库）
 ```
 
 ## 版本说明
