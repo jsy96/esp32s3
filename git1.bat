@@ -78,3 +78,4 @@ exit /b 1
 :pushok
 echo [git1] push OK
 endlocal
+pause
