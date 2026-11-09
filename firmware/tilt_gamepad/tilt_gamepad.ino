@@ -1,7 +1,7 @@
 /*
  * ============================================================
- *  ESP32-S3 + MPU-6050 体感倾斜游戏手柄固件
- *  版本: v1.0.261105-1
+ *  ESP32-S3 + MPU-6050/MPU-6500 体感倾斜游戏手柄固件
+ *  版本: v1.0.261109-1
  * ============================================================
  *  功能:
  *    - MPU-6050 (I2C, 200Hz) 采样 + Mahony 六轴姿态融合
@@ -37,7 +37,7 @@
 #include <Wire.h>
 #include "USBHIDGamepad.h"
 
-#define APP_VERSION "v1.0.261105-1"
+#define APP_VERSION "v1.0.261109-1"
 
 /* ---------------- 引脚配置 ---------------- */
 #define I2C_SDA_PIN   8      /* MPU-6050 SDA */
@@ -101,13 +101,14 @@ static void ledSet(int r, int g, int b) {
 }
 
 /* ============================================================
- *  MPU-6050 寄存器级 I2C 驱动
+ *  MPU-6050/MPU-6500 寄存器级 I2C 驱动
  * ============================================================ */
 #define MPU_ADDR              0x68
 #define REG_SMPLRT_DIV        0x19
 #define REG_CONFIG            0x1A
 #define REG_GYRO_CONFIG       0x1B
 #define REG_ACCEL_CONFIG      0x1C
+#define REG_ACCEL_CONFIG2     0x1D       /* MPU-6500 only */
 #define REG_ACCEL_XOUT_H      0x3B
 #define REG_USER_CTRL         0x6A
 #define REG_PWR_MGMT_1        0x6B
@@ -136,22 +137,32 @@ static bool mpuReadRegs(uint8_t reg, uint8_t *buf, uint8_t n) {
   return true;
 }
 
-/* 返回: 0=成功(是MPU-6050), -1=I2C无应答, 其他=WHO_AM_I值(不是MPU-6050) */
-static int mpuInit(void) {
-  uint8_t who = 0;
-  if (!mpuReadRegs(REG_WHO_AM_I, &who, 1)) return -1;
-  if (who != 0x68) return who;
+static uint8_t mpuWho = 0;
 
-  mpuWrite(REG_PWR_MGMT_1, 0x80);          /* DEVICE_RESET */
+/* 写入后读回确认, 避免通信失败或配置未生效时仍报告初始化成功 */
+static bool mpuConfigure(uint8_t reg, uint8_t value) {
+  uint8_t actual = 0;
+  return mpuWrite(reg, value) && mpuReadRegs(reg, &actual, 1) && actual == value;
+}
+
+/* 返回: 0=成功, -1=I2C无应答, -2=配置失败, -3=未知型号(含ID=0) */
+static int mpuInit(void) {
+  if (!mpuReadRegs(REG_WHO_AM_I, &mpuWho, 1)) return -1;
+  if (mpuWho != 0x68 && mpuWho != 0x70) return -3;
+
+  if (!mpuWrite(REG_PWR_MGMT_1, 0x80)) return -2;  /* DEVICE_RESET */
   delay(100);
-  mpuWrite(REG_SIGNAL_PATH_RESET, 0x07);   /* 复位加速度/陀螺/温度通路 */
+  if (!mpuWrite(REG_SIGNAL_PATH_RESET, 0x07)) return -2;
   delay(100);
-  mpuWrite(REG_PWR_MGMT_1, 0x01);          /* 唤醒, 时钟源=X轴陀螺PLL */
+  if (!mpuConfigure(REG_PWR_MGMT_1, 0x01)) return -2; /* PLL时钟, 唤醒 */
   delay(50);
-  mpuWrite(REG_SMPLRT_DIV, 4);             /* 1kHz/(1+4) = 200Hz */
-  mpuWrite(REG_CONFIG, 0x03);              /* DLPF 44Hz (身体动作足够, 抖动小) */
-  mpuWrite(REG_GYRO_CONFIG, 0x08);         /* +-500 dps */
-  mpuWrite(REG_ACCEL_CONFIG, 0x00);        /* +-2 g */
+  if (!mpuConfigure(REG_SMPLRT_DIV, 4) ||      /* 1kHz/(1+4) = 200Hz */
+      !mpuConfigure(REG_CONFIG, 0x03) ||       /* 陀螺DLPF: 6050=42Hz, 6500=41Hz */
+      !mpuConfigure(REG_GYRO_CONFIG, 0x08) ||  /* +-500dps, 6500 FCHOICE_B=0 */
+      !mpuConfigure(REG_ACCEL_CONFIG, 0x00))  /* +-2g, 两型号比例系数相同 */
+    return -2;
+  /* 6500 的加速度DLPF独立配置; 6050没有此寄存器, 不可写入 */
+  if (mpuWho == 0x70 && !mpuConfigure(REG_ACCEL_CONFIG2, 0x03)) return -2;
   delay(50);
   return 0;
 }
@@ -513,20 +524,22 @@ void setup() {
   Serial.println();
   Serial.println("==============================================");
   Serial.printf("  tilt_gamepad  %s\n", APP_VERSION);
-  Serial.println("  ESP32-S3 + MPU-6050 体感倾斜 USB 游戏手柄");
+  Serial.println("  ESP32-S3 + MPU-6050/MPU-6500 体感倾斜 USB 游戏手柄");
   Serial.println("  遥测: 串口发 s 开始 / x 停止 | 回中: r");
   Serial.println("==============================================");
 
   int r = mpuInit();
   while (r != 0) {
-    if (r == -1) Serial.println("#E 错误: I2C 无应答, 检查接线/地址 (SDA=8 SCL=9)");
-    else         Serial.printf("#E 错误: WHO_AM_I=0x%02X, 不是 MPU-6050\n", r);
+    if (r == -1)      Serial.println("#E 错误: I2C 无应答, 检查接线/地址 (SDA=8 SCL=9)");
+    else if (r == -2) Serial.println("#E 错误: IMU 寄存器配置写入/读回失败");
+    else              Serial.printf("#E 错误: 不支持的 WHO_AM_I=0x%02X (支持 0x68/0x70)\n", mpuWho);
     i2cScan();
     for (int i = 0; i < 10; i++) { ledSet(80, 0, 0); delay(100); ledSet(0, 0, 0); delay(100); }
     delay(1000);
     r = mpuInit();
   }
-  Serial.println("#E MPU-6050 初始化成功");
+  Serial.printf("#E %s 初始化成功 (WHO_AM_I=0x%02X, 200Hz, +/-2g, +/-500dps)\n",
+                mpuWho == 0x70 ? "MPU-6500-compatible" : "MPU-6050", mpuWho);
 
   delay(200);          /* 丢弃上电瞬间的脏数据 */
   calibStart();
